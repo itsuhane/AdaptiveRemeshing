@@ -70,7 +70,7 @@ public:
             Mesh::Point pt_mid = 0.5f*(pt_from + pt_to);
             Mesh::VertexHandle vh_mid = mesh.split(eh, pt_mid);
 
-            for (Mesh::VertexEdgeCCWIter vei = mesh.ve_ccwbegin(vh_mid); vei != mesh.ve_ccwiter(vh_mid); ++vei) {
+            for (Mesh::VertexEdgeCCWIter vei = mesh.ve_ccwbegin(vh_mid); vei != mesh.ve_ccwend(vh_mid); ++vei) {
                 if (mesh.calc_edge_length(*vei) > target_length) {
                     edge_to_split.emplace(*vei);
                 }
