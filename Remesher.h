@@ -12,9 +12,30 @@ struct RemesherTraits : OpenMesh::DefaultTraits
     EdgeAttributes(OpenMesh::Attributes::Status);
     FaceAttributes(OpenMesh::Attributes::Normal | OpenMesh::Attributes::Status);
 
-    VertexTraits{
+    VertexTraits {
     public:
         Point cog;
+
+        bool is_locked() const {
+            return m_locked;
+        }
+        void set_locked(bool locked) {
+            m_locked = locked;
+        }
+    private:
+        bool m_locked = false;
+    };
+
+    EdgeTraits {
+    public:
+        bool is_feature() const {
+            return m_feature;
+        }
+        void set_feature(bool feature) {
+            m_feature = feature;
+        }
+    private:
+        bool m_feature = false;
     };
 };
 
@@ -61,6 +82,8 @@ public:
             Mesh::EdgeHandle eh = edge_to_split.top();
             edge_to_split.pop();
 
+            bool is_feature = mesh.data(eh).is_feature();
+
             Mesh::HalfedgeHandle heh = mesh.halfedge_handle(eh, 0);
             Mesh::VertexHandle vh_from = mesh.from_vertex_handle(heh);
             Mesh::VertexHandle vh_to = mesh.to_vertex_handle(heh);
@@ -71,6 +94,11 @@ public:
             Mesh::VertexHandle vh_mid = mesh.split(eh, pt_mid);
 
             for (Mesh::VertexEdgeCCWIter vei = mesh.ve_ccwbegin(vh_mid); vei != mesh.ve_ccwend(vh_mid); ++vei) {
+                Mesh::HalfedgeHandle heh = mesh.halfedge_handle(*vei, 0);
+                Mesh::VertexHandle vh = mesh.to_vertex_handle(heh);
+                if (vh == vh_from || vh == vh_to) {
+                    mesh.data(*vei).set_feature(is_feature); // feature can be split, but must retain its feature flag.
+                }
                 if (mesh.calc_edge_length(*vei) > target_length) {
                     edge_to_split.emplace(*vei);
                 }
@@ -82,6 +110,7 @@ public:
     static void collapse_shorter(Mesh &mesh, float target_length) {
         std::vector<Mesh::EdgeHandle> edge_to_collapse;
         for (Mesh::EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
+            if (mesh.data(*ei).is_feature()) continue; // feature edge cannot collapse
             if (mesh.calc_edge_length(*ei) < 0.8*target_length) {
                 edge_to_collapse.emplace_back(*ei);
             }
@@ -133,7 +162,7 @@ public:
 
     static void adjust_valence(Mesh &mesh) {
         for (Mesh::EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
-            if (mesh.is_boundary(*ei) || !mesh.is_flip_ok(*ei)) continue;
+            if (mesh.is_boundary(*ei) || mesh.data(*ei).is_feature() || !mesh.is_flip_ok(*ei)) continue;
 
             Mesh::HalfedgeHandle heh = mesh.halfedge_handle(*ei, 0);
             Mesh::VertexHandle a0 = mesh.to_vertex_handle(heh);
@@ -194,7 +223,7 @@ public:
 
     static void smooth(Mesh &mesh, float lambda, bool tangential) {
         for (Mesh::VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
-            if (mesh.is_boundary(*vi)) {
+            if (mesh.is_boundary(*vi) || mesh.data(*vi).is_locked()) {
                 mesh.data(*vi).cog = mesh.point(*vi);
             }
             else {
