@@ -88,16 +88,44 @@ public:
         }
 
         for (Mesh::EdgeHandle &eh : edge_to_collapse) {
-            Mesh::HalfedgeHandle heh = mesh.halfedge_handle(eh, 0);
-            Mesh::VertexHandle vh_from = mesh.from_vertex_handle(heh);
-            Mesh::VertexHandle vh_to = mesh.to_vertex_handle(heh);
+            for (int side = 0; side <= 1; ++side) {
+                Mesh::HalfedgeHandle heh = mesh.halfedge_handle(eh, side);
+                Mesh::VertexHandle vh_from = mesh.from_vertex_handle(heh);
+                Mesh::VertexHandle vh_to = mesh.to_vertex_handle(heh);
 
-            bool can_collapse = mesh.is_collapse_ok(heh) && !mesh.is_boundary(vh_from) && !mesh.is_boundary(vh_to) &&
-                std::none_of(mesh.ve_ccwbegin(vh_from), mesh.ve_ccwend(vh_from), [&](const Mesh::EdgeHandle &eh) -> bool {
-                return mesh.calc_edge_length(eh) >= 4.0*target_length / 3.0;
-            });
+                bool topo_can_collapse = !mesh.is_boundary(vh_from) // boundary vertex cannot move
+                    && !mesh.data(vh_from).is_locked() // locked vertex cannot move
+                    && mesh.is_collapse_ok(heh) // collapse cannot harm topology
+                    && std::none_of(mesh.ve_ccwbegin(vh_from), mesh.ve_ccwend(vh_from), [&](const Mesh::EdgeHandle &eh) -> bool { // collapse cannot introduce long edge
+                        return mesh.calc_edge_length(eh) >= 4.0*target_length / 3.0;
+                    }
+                );
 
-            if (can_collapse) {
+                if (!topo_can_collapse) continue;
+
+                // topologically ok to collapse
+                // now check geometry constraints
+                // to vertex must see all 1-ring neighbors of from vertex
+                Mesh::Normal normal;
+                mesh.calc_vertex_normal_loop(vh_from, normal);
+
+                Mesh::Point pto = mesh.point(vh_to);
+                std::vector<Mesh::Point> ring;
+                for (Mesh::HalfedgeHandle rheh = mesh.cw_rotated_halfedge_handle(heh); rheh != heh; rheh = mesh.cw_rotated_halfedge_handle(rheh)) {
+                    ring.push_back(mesh.point(mesh.to_vertex_handle(rheh)));
+                }
+
+                bool geom_can_collapse = true;
+                for (size_t i = 1; i < ring.size(); ++i) {
+                    Mesh::Point vto = pto - ring[i];
+                    Mesh::Point vprev = ring[i - 1] - ring[i];
+                    if (OpenMesh::dot(OpenMesh::cross(vprev, vto), normal) < 0) {
+                        geom_can_collapse = false;
+                        break;
+                    }
+                }
+                if (!geom_can_collapse) continue;
+
                 mesh.collapse(heh);
             }
         }
@@ -138,7 +166,28 @@ public:
             int dev_post = abs(diff_a0 - 1) + abs(diff_a1 + 1) + abs(diff_a2 - 1) + abs(diff_a3 + 1);
 
             if (dev_post < dev_pre) {
-                mesh.flip(*ei);
+                // topologically it is preferred to flip
+                // but we have to pay attention that a flip is geometrically ok
+                Mesh::Point p0 = mesh.point(a0);
+                Mesh::Point p1 = mesh.point(a1);
+                Mesh::Point p2 = mesh.point(a2);
+                Mesh::Point p3 = mesh.point(a3);
+
+                Mesh::Point v20 = (p0 - p2).normalize_cond();
+                Mesh::Point v02 = -v20;
+
+                Mesh::Point v01 = (p1 - p0).normalize_cond();
+                Mesh::Point v03 = (p3 - p0).normalize_cond();
+
+                Mesh::Point v21 = (p1 - p2).normalize_cond();
+                Mesh::Point v23 = (p3 - p2).normalize_cond();
+
+                float angle0 = (acos(OpenMesh::sane_aarg(OpenMesh::dot(v01, v02))) + acos(OpenMesh::sane_aarg(OpenMesh::dot(v03, v02))));
+                float angle2 = (acos(OpenMesh::sane_aarg(OpenMesh::dot(v21, v20))) + acos(OpenMesh::sane_aarg(OpenMesh::dot(v23, v20))));
+
+                if (angle0 < 0.9*M_PI && angle2 < 0.9*M_PI) {
+                    mesh.flip(*ei);
+                }
             }
         }
     }
