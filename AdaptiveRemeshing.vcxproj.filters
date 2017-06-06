@@ -23,5 +23,8 @@
     <ClInclude Include="Remesher.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CurvatureEstimator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

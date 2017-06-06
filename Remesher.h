@@ -4,6 +4,7 @@
 #include <queue>
 #include <algorithm>
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
+#include "CurvatureEstimator.h"
 
 struct RemesherTraits : OpenMesh::DefaultTraits
 {
@@ -12,7 +13,7 @@ struct RemesherTraits : OpenMesh::DefaultTraits
     EdgeAttributes(OpenMesh::Attributes::Status);
     FaceAttributes(OpenMesh::Attributes::Normal | OpenMesh::Attributes::Status);
 
-    VertexTraits {
+    template <class Base, class Refs> struct VertexT : public CurvatureEstimatorTraits::VertexT<Base, Refs> {
     public:
         Point cog;
 
