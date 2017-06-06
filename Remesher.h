@@ -3,6 +3,7 @@
 #include <vector>
 #include <queue>
 #include <algorithm>
+#include <chrono>
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
 #include "CurvatureEstimator.h"
 
@@ -66,11 +67,13 @@ public:
     }
 
     static Scalar estimate_target_length(const Mesh &mesh, const Scalar lambda = 0.5) {
+		printf("estimate_target_length...");
         std::vector<Scalar> lengths;
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
             lengths.push_back(mesh.calc_edge_length(*ei));
         }
         std::sort(lengths.begin(), lengths.end());
+		puts("done.");
         return lengths[size_t((lengths.size() - 1)*lambda)];
     }
 
@@ -84,26 +87,43 @@ public:
             collapse_shorter(mesh, target_length);
             adjust_valence(mesh);
             mesh.garbage_collection();
+			printf("smoothing...");
             for (int j = 0; j < max_smooth_iter; ++j) {
                 mesh.update_normals();
                 smooth(mesh, smooth_rate, i > 1);
             }
+			puts("done.");
         }
     }
 
     static void split_longer(Mesh &mesh, Scalar target_length) {
-        auto cmp = [&](const EdgeHandle &eh1, const EdgeHandle &eh2)->bool {
+		puts("split_longer...");
+
+		puts("  listing edges...");
+		auto cmp = [&](const EdgeHandle &eh1, const EdgeHandle &eh2)->bool {
             return mesh.calc_edge_length(eh1) < mesh.calc_edge_length(eh2);
         };
         std::priority_queue<EdgeHandle, std::vector<EdgeHandle>, decltype(cmp)> edge_to_split(cmp);
-
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
             if (mesh.calc_edge_length(*ei) > target_length) {
                 edge_to_split.emplace(*ei);
             }
         }
 
+		using std::chrono::seconds;
+		using std::chrono::system_clock;
+
+		puts("  splitting...");
+		size_t nv = mesh.n_vertices(), ne = mesh.n_edges(), nf = mesh.n_faces();
+		system_clock::time_point T0 = system_clock::now();
+		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\r", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
         while (!edge_to_split.empty()) {
+			system_clock::time_point T1 = system_clock::now();
+			if (std::chrono::duration_cast<seconds>(T1-T0).count() >= 1) {
+				T0 = T1;
+				printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\r", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
+			}
+
             EdgeHandle eh = edge_to_split.top();
             edge_to_split.pop();
 
@@ -129,10 +149,14 @@ public:
                 }
             }
         }
-    }
+		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\n  done.\n", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
+	}
 
 
     static void collapse_shorter(Mesh &mesh, Scalar target_length) {
+		puts("collapse_shorter...");
+
+		puts("  listing edges...");
         std::vector<EdgeHandle> edge_to_collapse;
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
             if (mesh.data(*ei).is_feature()) continue; // feature edge cannot collapse
@@ -141,9 +165,24 @@ public:
             }
         }
 
-        for (EdgeHandle &eh : edge_to_collapse) {
+		using std::chrono::seconds;
+		using std::chrono::system_clock;
+
+		puts("  collapsing...");
+		char progress_char[] = { '\\', '|', '/', '-' };
+		size_t nv = mesh.n_vertices(), ne = mesh.n_edges(), nf = mesh.n_faces(), pr = 0;
+		system_clock::time_point T0 = system_clock::now();
+		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> \r", "", nv, ne, nf);
+		for (EdgeHandle &eh : edge_to_collapse) {
             for (int side = 0; side <= 1; ++side) {
-                HalfedgeHandle heh = mesh.halfedge_handle(eh, side);
+				system_clock::time_point T1 = system_clock::now();
+				if (std::chrono::duration_cast<seconds>(T1 - T0).count() >= 1) {
+					T0 = T1;
+					printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) %c> \r", "", nv, ne, nf, progress_char[pr]);
+					pr = (pr + 1) % 4;
+				}
+
+				HalfedgeHandle heh = mesh.halfedge_handle(eh, side);
                 VertexHandle vh_from = mesh.from_vertex_handle(heh);
                 VertexHandle vh_to = mesh.to_vertex_handle(heh);
 
@@ -183,10 +222,24 @@ public:
                 mesh.collapse(heh);
             }
         }
+		mesh.garbage_collection();
+		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\n  done.\n", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
     }
 
     static void adjust_valence(Mesh &mesh) {
+		using std::chrono::seconds;
+		using std::chrono::system_clock;
+
+		size_t ne = mesh.n_edges(), ncount = 0;
+		system_clock::time_point T0 = system_clock::now();
+		printf("% 80s\radjust_valence...%zd/%zd\r", "", ncount, ne);
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
+			ncount++;
+			system_clock::time_point T1 = system_clock::now();
+			if (std::chrono::duration_cast<seconds>(T1 - T0).count() >= 1) {
+				T0 = T1;
+				printf("% 80s\radjust_valence...%zd/%zd\r", "", ncount, ne);
+			}
             if (mesh.is_boundary(*ei) || mesh.data(*ei).is_feature() || !mesh.is_flip_ok(*ei)) continue;
 
             HalfedgeHandle heh = mesh.halfedge_handle(*ei, 0);
@@ -244,9 +297,12 @@ public:
                 }
             }
         }
-    }
+		printf("% 80s\radjust_valence...done.\n", "");
+	}
 
     static void smooth(Mesh &mesh, Scalar lambda, bool tangential) {
+		// message shown outside
+		//printf("smooth...");
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
             if (mesh.is_boundary(*vi) || mesh.data(*vi).is_locked()) {
                 mesh.data(*vi).cog = mesh.point(*vi);
@@ -268,5 +324,6 @@ public:
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
             mesh.set_point(*vi, mesh.data(*vi).cog);
         }
+		//puts("done.");
     }
 };
