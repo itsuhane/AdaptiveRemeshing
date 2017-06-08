@@ -18,6 +18,12 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="maxflow\graph.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="maxflow\maxflow.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Remesher.h">
@@ -26,5 +32,16 @@
     <ClInclude Include="CurvatureEstimator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="maxflow\block.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="maxflow\graph.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="maxflow\instances.inc">
+      <Filter>Header Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

@@ -119,10 +119,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="maxflow\graph.cpp" />
+    <ClCompile Include="maxflow\maxflow.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CurvatureEstimator.h" />
+    <ClInclude Include="maxflow\block.h" />
+    <ClInclude Include="maxflow\graph.h" />
     <ClInclude Include="Remesher.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="maxflow\instances.inc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

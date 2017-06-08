@@ -6,6 +6,7 @@
 #include <chrono>
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
 #include "CurvatureEstimator.h"
+#include "maxflow/graph.h"
 
 struct RemesherTraits : OpenMesh::DefaultTraits
 {
@@ -39,6 +40,18 @@ struct RemesherTraits : OpenMesh::DefaultTraits
     private:
         bool m_feature = false;
     };
+
+    FaceTraits {
+    public:
+        float weight() const {
+            return m_weight;
+        }
+        void set_weight(float weight) {
+            m_weight = weight;
+        }
+    private:
+        float m_weight = 0.0;
+    };
 };
 
 template <typename Mesh>
@@ -56,7 +69,13 @@ public:
     typedef typename Mesh::EdgeHandle EdgeHandle;
     typedef typename Mesh::EdgeIter EdgeIter;
 
+    typedef typename Mesh::FaceHandle FaceHandle;
+    typedef typename Mesh::FaceIter FaceIter;
+    typedef typename Mesh::FaceVertexCCWIter FaceVertexCCWIter;
+
     typedef typename Mesh::HalfedgeHandle HalfedgeHandle;
+
+    typedef Graph<Scalar, Scalar, Scalar> MaxFlowGraph;
 
     static bool is_manifold(const Mesh &mesh) {
         return std::all_of(mesh.vertices_sbegin(), mesh.vertices_end(),
@@ -66,14 +85,14 @@ public:
         );
     }
 
-    static Scalar estimate_target_length(const Mesh &mesh, const Scalar lambda = 0.5) {
-		printf("estimate_target_length...");
+    static Scalar estimate_target_length(const Mesh &mesh, Scalar lambda = 0.5) {
+        printf("estimate_target_length...");
         std::vector<Scalar> lengths;
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
             lengths.push_back(mesh.calc_edge_length(*ei));
         }
         std::sort(lengths.begin(), lengths.end());
-		puts("done.");
+        puts("done.");
         return lengths[size_t((lengths.size() - 1)*lambda)];
     }
 
@@ -87,20 +106,20 @@ public:
             collapse_shorter(mesh, target_length);
             adjust_valence(mesh);
             mesh.garbage_collection();
-			printf("smoothing...");
+            printf("smoothing...");
             for (int j = 0; j < max_smooth_iter; ++j) {
                 mesh.update_normals();
                 smooth(mesh, smooth_rate, i > 1);
             }
-			puts("done.");
+            puts("done.");
         }
     }
 
     static void split_longer(Mesh &mesh, Scalar target_length) {
-		puts("split_longer...");
+        puts("split_longer...");
 
-		puts("  listing edges...");
-		auto cmp = [&](const EdgeHandle &eh1, const EdgeHandle &eh2)->bool {
+        puts("  listing edges...");
+        auto cmp = [&](const EdgeHandle &eh1, const EdgeHandle &eh2)->bool {
             return mesh.calc_edge_length(eh1) < mesh.calc_edge_length(eh2);
         };
         std::priority_queue<EdgeHandle, std::vector<EdgeHandle>, decltype(cmp)> edge_to_split(cmp);
@@ -110,19 +129,19 @@ public:
             }
         }
 
-		using std::chrono::seconds;
-		using std::chrono::system_clock;
+        using std::chrono::seconds;
+        using std::chrono::system_clock;
 
-		puts("  splitting...");
-		size_t nv = mesh.n_vertices(), ne = mesh.n_edges(), nf = mesh.n_faces();
-		system_clock::time_point T0 = system_clock::now();
-		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\r", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
+        puts("  splitting...");
+        size_t nv = mesh.n_vertices(), ne = mesh.n_edges(), nf = mesh.n_faces();
+        system_clock::time_point T0 = system_clock::now();
+        printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\r", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
         while (!edge_to_split.empty()) {
-			system_clock::time_point T1 = system_clock::now();
-			if (std::chrono::duration_cast<seconds>(T1-T0).count() >= 1) {
-				T0 = T1;
-				printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\r", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
-			}
+            system_clock::time_point T1 = system_clock::now();
+            if (std::chrono::duration_cast<seconds>(T1-T0).count() >= 1) {
+                T0 = T1;
+                printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\r", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
+            }
 
             EdgeHandle eh = edge_to_split.top();
             edge_to_split.pop();
@@ -149,14 +168,14 @@ public:
                 }
             }
         }
-		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\n  done.\n", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
-	}
+        printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\n  done.\n", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
+    }
 
 
     static void collapse_shorter(Mesh &mesh, Scalar target_length) {
-		puts("collapse_shorter...");
+        puts("collapse_shorter...");
 
-		puts("  listing edges...");
+        puts("  listing edges...");
         std::vector<EdgeHandle> edge_to_collapse;
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
             if (mesh.data(*ei).is_feature()) continue; // feature edge cannot collapse
@@ -165,24 +184,24 @@ public:
             }
         }
 
-		using std::chrono::seconds;
-		using std::chrono::system_clock;
+        using std::chrono::seconds;
+        using std::chrono::system_clock;
 
-		puts("  collapsing...");
-		char progress_char[] = { '\\', '|', '/', '-' };
-		size_t nv = mesh.n_vertices(), ne = mesh.n_edges(), nf = mesh.n_faces(), pr = 0;
-		system_clock::time_point T0 = system_clock::now();
-		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> \r", "", nv, ne, nf);
-		for (EdgeHandle &eh : edge_to_collapse) {
+        puts("  collapsing...");
+        char progress_char[] = { '\\', '|', '/', '-' };
+        size_t nv = mesh.n_vertices(), ne = mesh.n_edges(), nf = mesh.n_faces(), pr = 0;
+        system_clock::time_point T0 = system_clock::now();
+        printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> \r", "", nv, ne, nf);
+        for (EdgeHandle &eh : edge_to_collapse) {
             for (int side = 0; side <= 1; ++side) {
-				system_clock::time_point T1 = system_clock::now();
-				if (std::chrono::duration_cast<seconds>(T1 - T0).count() >= 1) {
-					T0 = T1;
-					printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) %c> \r", "", nv, ne, nf, progress_char[pr]);
-					pr = (pr + 1) % 4;
-				}
+                system_clock::time_point T1 = system_clock::now();
+                if (std::chrono::duration_cast<seconds>(T1 - T0).count() >= 1) {
+                    T0 = T1;
+                    printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) %c> \r", "", nv, ne, nf, progress_char[pr]);
+                    pr = (pr + 1) % 4;
+                }
 
-				HalfedgeHandle heh = mesh.halfedge_handle(eh, side);
+                HalfedgeHandle heh = mesh.halfedge_handle(eh, side);
                 VertexHandle vh_from = mesh.from_vertex_handle(heh);
                 VertexHandle vh_to = mesh.to_vertex_handle(heh);
 
@@ -222,24 +241,24 @@ public:
                 mesh.collapse(heh);
             }
         }
-		mesh.garbage_collection();
-		printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\n  done.\n", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
+        mesh.garbage_collection();
+        printf("% 80s\r    (V, E, F) = (%zd, %zd, %zd) -> (%zd, %zd, %zd)\n  done.\n", "", nv, ne, nf, mesh.n_vertices(), mesh.n_edges(), mesh.n_faces());
     }
 
     static void adjust_valence(Mesh &mesh) {
-		using std::chrono::seconds;
-		using std::chrono::system_clock;
+        using std::chrono::seconds;
+        using std::chrono::system_clock;
 
-		size_t ne = mesh.n_edges(), ncount = 0;
-		system_clock::time_point T0 = system_clock::now();
-		printf("% 80s\radjust_valence...%zd/%zd\r", "", ncount, ne);
+        size_t ne = mesh.n_edges(), ncount = 0;
+        system_clock::time_point T0 = system_clock::now();
+        printf("% 80s\radjust_valence...%zd/%zd\r", "", ncount, ne);
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
-			ncount++;
-			system_clock::time_point T1 = system_clock::now();
-			if (std::chrono::duration_cast<seconds>(T1 - T0).count() >= 1) {
-				T0 = T1;
-				printf("% 80s\radjust_valence...%zd/%zd\r", "", ncount, ne);
-			}
+            ncount++;
+            system_clock::time_point T1 = system_clock::now();
+            if (std::chrono::duration_cast<seconds>(T1 - T0).count() >= 1) {
+                T0 = T1;
+                printf("% 80s\radjust_valence...%zd/%zd\r", "", ncount, ne);
+            }
             if (mesh.is_boundary(*ei) || mesh.data(*ei).is_feature() || !mesh.is_flip_ok(*ei)) continue;
 
             HalfedgeHandle heh = mesh.halfedge_handle(*ei, 0);
@@ -297,12 +316,10 @@ public:
                 }
             }
         }
-		printf("% 80s\radjust_valence...done.\n", "");
-	}
+        printf("% 80s\radjust_valence...done.\n", "");
+    }
 
     static void smooth(Mesh &mesh, Scalar lambda, bool tangential) {
-		// message shown outside
-		//printf("smooth...");
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
             if (mesh.is_boundary(*vi) || mesh.data(*vi).is_locked()) {
                 mesh.data(*vi).cog = mesh.point(*vi);
@@ -324,6 +341,60 @@ public:
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
             mesh.set_point(*vi, mesh.data(*vi).cog);
         }
-		//puts("done.");
+    }
+
+    static void segment_feature_area(Mesh &mesh, Scalar lambda_1, Scalar lambda_2, Scalar weight) {
+        mesh.garbage_collection();
+
+        if (lambda_1 > lambda_2) std::swap(lambda_1, lambda_2);
+
+        std::vector<Scalar> ks;
+        for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
+            ks.push_back(abs(mesh.data(*vi).kmean()));
+        }
+        std::sort(ks.begin(), ks.end());
+        Scalar k1 = ks[size_t((ks.size() - 1)*lambda_1)];
+        Scalar k2 = ks[size_t((ks.size() - 1)*lambda_2)];
+
+        MaxFlowGraph graph((int)mesh.n_faces(), (int)mesh.n_edges());
+        graph.add_node((int)mesh.n_faces());
+
+        auto smootherstep = [](Scalar l, Scalar r, Scalar x) -> Scalar {
+            x = std::min(std::max((x - l) / (r - l), Scalar(0)), Scalar(1));
+            return x*x*x*(x*(x * 6 - 15) + 10);
+        };
+
+        for (FaceIter fi = mesh.faces_sbegin(); fi != mesh.faces_end(); ++fi) {
+            float kmean_sum = 0;
+            int count = 0;
+            for (FaceVertexCCWIter fvi = mesh.fv_ccwbegin(*fi); fvi != mesh.fv_ccwend(*fi); ++fvi) {
+                kmean_sum += abs(mesh.data(*fvi).kmean());
+                count++;
+            }
+            HalfedgeHandle heh = mesh.halfedge_handle(*fi);
+            float area = mesh.calc_sector_area(heh);
+            float w = smootherstep(k1, k2, kmean_sum/count);
+            graph.add_tweights(fi->idx(), area*w, area*(1 - w));
+        }
+
+        for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
+            if (mesh.is_boundary(*ei)) continue;
+            HalfedgeHandle heh = mesh.halfedge_handle(*ei, 0);
+            FaceHandle fh0 = mesh.face_handle(heh);
+            FaceHandle fh1 = mesh.opposite_face_handle(heh);
+            float len = mesh.calc_edge_length(heh)*weight;
+            graph.add_edge(fh0.idx(), fh1.idx(), len, len);
+        }
+
+        graph.maxflow();
+
+        for (FaceIter fi = mesh.faces_sbegin(); fi != mesh.faces_end(); ++fi) {
+            if (graph.what_segment(fi->idx()) == MaxFlowGraph::SOURCE) {
+                mesh.data(*fi).set_weight(1.0f);
+            }
+            else {
+                mesh.data(*fi).set_weight(0.0f);
+            }
+        }
     }
 };
