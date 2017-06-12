@@ -345,8 +345,10 @@ public:
     }
 
     static void segment_feature_area(Mesh &mesh, Scalar lambda_1, Scalar lambda_2, Scalar weight, std::function<void(Mesh &mesh)> callback = {}) {
+        puts("segment_feature_area...");
         mesh.garbage_collection();
 
+        puts("  building graph...");
         if (lambda_1 > lambda_2) std::swap(lambda_1, lambda_2);
 
         std::map<Scalar, Scalar> order_cost;
@@ -398,6 +400,7 @@ public:
             graph.add_edge(fh0.idx(), fh1.idx(), len, len);
         }
 
+        puts("  computing max-flow...");
         graph.maxflow();
 
         for (FaceIter fi = mesh.faces_sbegin(); fi != mesh.faces_end(); ++fi) {
@@ -408,5 +411,6 @@ public:
                 mesh.data(*fi).set_weight(0.0f);
             }
         }
+        puts("  done.");
     }
 };
