@@ -4,6 +4,7 @@
 #include <queue>
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
 #include "CurvatureEstimator.h"
 #include "maxflow/graph.h"
@@ -108,7 +109,6 @@ public:
             mesh.garbage_collection();
             printf("smoothing...");
             for (int j = 0; j < max_smooth_iter; ++j) {
-                mesh.update_normals();
                 smooth(mesh, smooth_rate, i > 1);
             }
             puts("done.");
@@ -320,6 +320,7 @@ public:
     }
 
     static void smooth(Mesh &mesh, Scalar lambda, bool tangential) {
+        mesh.update_normals();
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
             if (mesh.is_boundary(*vi) || mesh.data(*vi).is_locked()) {
                 mesh.data(*vi).cog = mesh.point(*vi);
@@ -343,18 +344,23 @@ public:
         }
     }
 
-    static void segment_feature_area(Mesh &mesh, Scalar lambda_1, Scalar lambda_2, Scalar weight) {
+    static void segment_feature_area(Mesh &mesh, Scalar lambda_1, Scalar lambda_2, Scalar weight, std::function<void(Mesh &mesh)> callback = {}) {
         mesh.garbage_collection();
 
         if (lambda_1 > lambda_2) std::swap(lambda_1, lambda_2);
 
-        std::vector<Scalar> ks;
+        std::map<Scalar, Scalar> order_cost;
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
-            ks.push_back(abs(mesh.data(*vi).kmean()));
+            order_cost.emplace(abs(mesh.data(*vi).kmean()), 0.0f);
         }
-        std::sort(ks.begin(), ks.end());
-        Scalar k1 = ks[size_t((ks.size() - 1)*lambda_1)];
-        Scalar k2 = ks[size_t((ks.size() - 1)*lambda_2)];
+        Scalar counter = -1.0f;
+        for (auto &c : order_cost) {
+            counter += 1.0f;
+            c.second = counter;
+        }
+        for (auto &c : order_cost) {
+            c.second = c.second / counter;
+        }
 
         MaxFlowGraph graph((int)mesh.n_faces(), (int)mesh.n_edges());
         graph.add_node((int)mesh.n_faces());
@@ -365,16 +371,22 @@ public:
         };
 
         for (FaceIter fi = mesh.faces_sbegin(); fi != mesh.faces_end(); ++fi) {
-            float kmean_sum = 0;
+            Scalar order_cost_avg = 0.0f;
             int count = 0;
             for (FaceVertexCCWIter fvi = mesh.fv_ccwbegin(*fi); fvi != mesh.fv_ccwend(*fi); ++fvi) {
-                kmean_sum += abs(mesh.data(*fvi).kmean());
+                order_cost_avg += order_cost[abs(mesh.data(*fvi).kmean())];
                 count++;
             }
+            order_cost_avg /= count;
             HalfedgeHandle heh = mesh.halfedge_handle(*fi);
-            float area = mesh.calc_sector_area(heh);
-            float w = smootherstep(k1, k2, kmean_sum/count);
+            Scalar area = mesh.calc_sector_area(heh);
+            Scalar w = smootherstep(lambda_1, lambda_2, order_cost_avg);
             graph.add_tweights(fi->idx(), area*w, area*(1 - w));
+            mesh.data(*fi).set_weight(w);
+        }
+
+        if (callback) {
+            callback(mesh);
         }
 
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
@@ -382,7 +394,7 @@ public:
             HalfedgeHandle heh = mesh.halfedge_handle(*ei, 0);
             FaceHandle fh0 = mesh.face_handle(heh);
             FaceHandle fh1 = mesh.opposite_face_handle(heh);
-            float len = mesh.calc_edge_length(heh)*weight;
+            Scalar len = mesh.calc_edge_length(heh)*weight;
             graph.add_edge(fh0.idx(), fh1.idx(), len, len);
         }
 
