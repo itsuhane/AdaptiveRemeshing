@@ -18,16 +18,22 @@ struct RemesherTraits : OpenMesh::DefaultTraits
 
     template <class Base, class Refs> struct VertexT : public CurvatureEstimatorTraits::VertexT<Base, Refs> {
     public:
-        Point cog;
-
         bool is_locked() const {
             return m_locked;
         }
         void set_locked(bool locked) {
             m_locked = locked;
         }
+
+        float weight() const {
+            return m_weight;
+        }
+        void set_weight(float weight) {
+            m_weight = weight;
+        }
     private:
         bool m_locked = false;
+        float m_weight = 0.0f;
     };
 
     EdgeTraits {
@@ -66,6 +72,7 @@ public:
     typedef typename Mesh::VertexIter VertexIter;
     typedef typename Mesh::VertexVertexCCWIter VertexVertexCCWIter;
     typedef typename Mesh::VertexEdgeCCWIter VertexEdgeCCWIter;
+    typedef typename Mesh::VertexOHalfedgeCCWIter VertexOHalfedgeCCWIter;
 
     typedef typename Mesh::EdgeHandle EdgeHandle;
     typedef typename Mesh::EdgeIter EdgeIter;
@@ -97,22 +104,41 @@ public:
         return lengths[size_t((lengths.size() - 1)*lambda)];
     }
 
-    static void run(Mesh &mesh, Scalar target_length_lambda = 0.5, int max_iter = 5, int max_smooth_iter = 5, Scalar smooth_rate = 0.2) {
+    static void run(Mesh &mesh, Scalar target_length, int max_iter = 5, int max_smooth_iter = 5, Scalar smooth_rate = 0.2) {
         if (!is_manifold(mesh)) {
             puts("Warning: mesh is not manifold!");
         }
-        Scalar target_length = estimate_target_length(mesh, target_length_lambda);
         for (int i = max_iter; i > 0; --i) {
             split_longer(mesh, target_length);
             collapse_shorter(mesh, target_length);
             adjust_valence(mesh);
-            mesh.garbage_collection();
+            clean_triangles(mesh);
             printf("smoothing...");
             for (int j = 0; j < max_smooth_iter; ++j) {
                 smooth(mesh, smooth_rate, i > 1);
             }
             puts("done.");
         }
+    }
+
+    static void run_bicut(
+        Mesh &mesh,
+        Scalar dense_length,
+        Scalar sparse_length,
+        Scalar dense_percentile = 0.5f,
+        Scalar sparse_percentile = 0.6f,
+        Scalar gc_weight = 1.25f,
+        int max_iter = 5,
+        int max_smooth_iter = 5,
+        Scalar smooth_rate = 0.2
+    ) {
+        Remesher<Mesh>::run(mesh, dense_length, max_iter, max_smooth_iter, smooth_rate);
+        printf("estimating curvature...");
+        CurvatureEstimator<Mesh>::run(mesh);
+        puts("done.");
+        Remesher<Mesh>::segment_feature_area(mesh, dense_percentile, sparse_percentile, gc_weight);
+        Remesher<Mesh>::lock_feature_area(mesh);
+        Remesher<Mesh>::run(mesh, sparse_length, max_iter, max_smooth_iter, smooth_rate);
     }
 
     static void split_longer(Mesh &mesh, Scalar target_length) {
@@ -209,7 +235,7 @@ public:
                     && !mesh.data(vh_from).is_locked() // locked vertex cannot move
                     && mesh.is_collapse_ok(heh) // collapse cannot harm topology
                     && std::none_of(mesh.ve_ccwbegin(vh_from), mesh.ve_ccwend(vh_from), [&](const EdgeHandle &eh) -> bool { // collapse cannot introduce long edge
-                        return mesh.calc_edge_length(eh) >= 4.0*target_length / 3.0;
+                        return mesh.calc_edge_length(eh) >= 4.0f*target_length / 3.0f;
                     }
                 );
 
@@ -231,7 +257,7 @@ public:
                 for (size_t i = 1; i < ring.size(); ++i) {
                     Point vto = pto - ring[i];
                     Point vprev = ring[i - 1] - ring[i];
-                    if (OpenMesh::dot(OpenMesh::cross(vprev, vto), normal) < 0) {
+                    if (OpenMesh::dot(OpenMesh::cross(vprev, vto), normal) < 0.0f) {
                         geom_can_collapse = false;
                         break;
                     }
@@ -321,30 +347,50 @@ public:
 
     static void smooth(Mesh &mesh, Scalar lambda, bool tangential) {
         mesh.update_normals();
+        OpenMesh::VPropHandleT<Point> cog_p;
+        mesh.add_property(cog_p);
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
             if (mesh.is_boundary(*vi) || mesh.data(*vi).is_locked()) {
-                mesh.data(*vi).cog = mesh.point(*vi);
+                mesh.property(cog_p, *vi) = mesh.point(*vi);
             }
             else {
-                mesh.data(*vi).cog = { 0.0f, 0.0f, 0.0f };
+                mesh.property(cog_p, *vi) = { 0.0f, 0.0f, 0.0f };
                 for (VertexVertexCCWIter vvi = mesh.vv_ccwbegin(*vi); vvi != mesh.vv_ccwend(*vi); ++vvi) {
-                    mesh.data(*vi).cog += mesh.point(*vvi);
+                    mesh.property(cog_p, *vi) += mesh.point(*vvi);
                 }
-                mesh.data(*vi).cog /= (Scalar)mesh.valence(*vi);
-                Point shift = mesh.data(*vi).cog - mesh.point(*vi);
+                mesh.property(cog_p, *vi) /= (Scalar)mesh.valence(*vi);
+                Point shift = mesh.property(cog_p, *vi) - mesh.point(*vi);
                 if (tangential) {
                     Normal normal = mesh.normal(*vi);
                     shift -= normal*dot(normal, shift);
                 }
-                mesh.data(*vi).cog = mesh.point(*vi) + lambda*shift;
+                mesh.property(cog_p, *vi) = mesh.point(*vi) + lambda*shift;
             }
         }
         for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
-            mesh.set_point(*vi, mesh.data(*vi).cog);
+            mesh.set_point(*vi, mesh.property(cog_p, *vi));
         }
+        mesh.remove_property(cog_p);
     }
 
-    static void segment_feature_area(Mesh &mesh, Scalar lambda_1, Scalar lambda_2, Scalar weight, std::function<void(Mesh &mesh)> callback = {}) {
+    static void clean_triangles(Mesh &mesh) {
+        printf("clean_triangles...");
+        for (VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
+            if (mesh.data(*vi).is_locked() || mesh.is_boundary(*vi)) continue;
+            if (mesh.valence(*vi) == 3) {
+                for (VertexOHalfedgeCCWIter vohei = mesh.voh_ccwbegin(*vi); vohei != mesh.voh_ccwend(*vi); ++vohei) {
+                    if (mesh.is_collapse_ok(*vohei)) {
+                        mesh.collapse(*vohei);
+                        break;
+                    }
+                }
+            }
+        }
+        mesh.garbage_collection();
+        puts("done.");
+    }
+
+    static void segment_feature_area(Mesh &mesh, Scalar lambda_1, Scalar lambda_2, Scalar weight) {
         puts("segment_feature_area...");
         mesh.garbage_collection();
 
@@ -387,10 +433,6 @@ public:
             mesh.data(*fi).set_weight(w);
         }
 
-        if (callback) {
-            callback(mesh);
-        }
-
         for (EdgeIter ei = mesh.edges_sbegin(); ei != mesh.edges_end(); ++ei) {
             if (mesh.is_boundary(*ei)) continue;
             HalfedgeHandle heh = mesh.halfedge_handle(*ei, 0);
@@ -412,5 +454,15 @@ public:
             }
         }
         puts("  done.");
+    }
+
+    static void lock_feature_area(Mesh &mesh) {
+        for (Mesh::VertexIter vi = mesh.vertices_sbegin(); vi != mesh.vertices_end(); ++vi) {
+            for (Mesh::VertexFaceCCWIter vfi = mesh.vf_ccwbegin(*vi); vfi != mesh.vf_ccwend(*vi); ++vfi) {
+                if (mesh.data(*vfi).weight() > 0.5f) {
+                    mesh.data(*vi).set_locked(true);
+                }
+            }
+        }
     }
 };
